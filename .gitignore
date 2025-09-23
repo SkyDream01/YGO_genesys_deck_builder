@@ -1,0 +1,9 @@
+*.ttf
+__pycache__/
+*.mp4
+*.kproj
+*.jpg
+*.ydk
+card2points.json
+cards.json
+merged.py
