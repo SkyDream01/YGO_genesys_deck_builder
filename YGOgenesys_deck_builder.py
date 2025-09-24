@@ -8,8 +8,10 @@ from PySide6.QtWidgets import (
     QMenuBar, QMenu, QListWidget, QListWidgetItem, QMessageBox,
     QPushButton, QGroupBox, QComboBox
 )
-from PySide6.QtGui import QPixmap, QAction, QActionGroup
-from PySide6.QtCore import Qt
+from PySide6.QtGui import (
+    QPixmap, QAction, QIcon, QActionGroup, QPainter, QFont, QColor
+)
+from PySide6.QtCore import Qt, QSize, QRect
 
 class DeckBuilderWindow(QMainWindow):
     def __init__(self):
@@ -23,6 +25,7 @@ class DeckBuilderWindow(QMainWindow):
         self.id_to_cid = {}
         self.card_list_cids = []
         self.current_file_path = None
+        self.icon_size = QSize(60, 88) # Define icon size for reuse
         
         # --- Interaction State ---
         self.active_cid = None
@@ -105,18 +108,24 @@ class DeckBuilderWindow(QMainWindow):
             "side_deck_size_error": {"zh": "副卡组数量 ({0}) 不能超过15张。", "ja": "サイドデッキの枚数 ({0}) は15枚を超えることはできません。", "en": "Side Deck cannot have more than 15 cards (currently {0})."},
             "copy_limit_error": {"zh": "卡片 '{0}' 的合计投入数量超过3张。", "ja": "カード '{0}' の合計枚数が3枚を超えています。", "en": "More than 3 copies of '{0}' were found."},
             "extra_in_main_list_header": {"zh": "\n以下额外卡组怪兽不能在主卡组中:", "ja": "\n以下のEXデッキモンスターはメインデッキに入れられません:", "en": "\nThe following Extra Deck monsters cannot be in the Main Deck:"},
-            "main_in_extra_list_header": {"zh": "\n以下非额外卡组怪兽不能在额外卡组中:", "ja": "\n以下の非EXデッキモンスターはEXデッキに入れられません:", "en": "\nThe following non-Extra Deck monsters cannot be in the Extra Deck:"}
+            "main_in_extra_list_header": {"zh": "\n以下非额外卡组怪兽不能在额外卡组中:", "ja": "\n以下の非EXデッキモンスターはEXデッキに入れられません:", "en": "\nThe following non-Extra Deck monsters cannot be in the Extra Deck:"},
+            "monster_short": {"zh": "怪", "ja": "モ", "en": "M"},
+            "spell_short": {"zh": "魔", "ja": "魔", "en": "S"},
+            "trap_short": {"zh": "陷", "ja": "罠", "en": "T"},
+            "fusion_short": {"zh": "融", "ja": "融", "en": "F"},
+            "synchro_short": {"zh": "同", "ja": "S", "en": "S"},
+            "xyz_short": {"zh": "超", "ja": "X", "en": "X"},
+            "pend_link_forbidden_title": {"zh": "禁止的卡片类型", "ja": "禁止カードタイプ", "en": "Forbidden Card Type"},
+            "pend_link_forbidden_msg": {"zh": "此构筑器禁止添加灵摆和连接怪兽。", "ja": "このビルダーではペンデュラムとリンクモンスターの追加は禁止されています。", "en": "Pendulum and Link monsters are forbidden in this deck builder."},
         }
 
     def load_card_data(self):
         try:
             with open("cards_data.json", "r", encoding="utf-8") as f: data = json.load(f)
             for cid, card_data in data.items():
-                card_type_text = card_data.get("text", {}).get("types", "")
-                if "链接" not in card_type_text and "灵摆" not in card_type_text:
-                    self.all_cards[cid] = card_data
-                    card_id = card_data.get("id")
-                    if card_id: self.id_to_cid[str(card_id)] = cid
+                self.all_cards[cid] = card_data
+                card_id = card_data.get("id")
+                if card_id: self.id_to_cid[str(card_id)] = cid
             self.card_list_cids = sorted(self.all_cards.keys(), key=lambda c: self.get_card_display_name(self.all_cards[c]) or "")
         except FileNotFoundError: QMessageBox.critical(self, "Error", "cards_data.json not found.")
         except Exception as e: QMessageBox.critical(self, "Error", f"Failed to load card data: {e}")
@@ -164,25 +173,41 @@ class DeckBuilderWindow(QMainWindow):
         self.main_deck_group, self.main_deck_list = self.create_deck_list_widget("Main Deck")
         self.extra_deck_group, self.extra_deck_list = self.create_deck_list_widget("Extra Deck")
         self.side_deck_group, self.side_deck_list = self.create_deck_list_widget("Side Deck")
-        right_layout.addWidget(self.main_deck_group); right_layout.addWidget(self.extra_deck_group); right_layout.addWidget(self.side_deck_group)
-        splitter.setSizes([500, 760])
+        right_layout.addWidget(self.main_deck_group, 2)
+        right_layout.addWidget(self.extra_deck_group, 1)
+        right_layout.addWidget(self.side_deck_group, 1)
+        splitter.setSizes([500, 860])
 
     def create_deck_list_widget(self, name):
-        group_box = QGroupBox(); list_widget = QListWidget(); list_widget.setObjectName(name)
+        group_box = QGroupBox()
+        list_widget = QListWidget()
+        list_widget.setObjectName(name)
+        
+        list_widget.setViewMode(QListWidget.IconMode)
+        list_widget.setResizeMode(QListWidget.Adjust)
+        list_widget.setIconSize(self.icon_size)
+        list_widget.setGridSize(QSize(self.icon_size.width() + 10, self.icon_size.height() + 18))
+        list_widget.setMovement(QListWidget.Static)
+        list_widget.setWordWrap(True)
+        list_widget.setStyleSheet("QListWidget::item { text-align: center; }")
+
         list_widget.itemSelectionChanged.connect(self.on_deck_card_selected)
         list_widget.itemDoubleClicked.connect(self.on_deck_card_double_clicked)
-        layout = QVBoxLayout(group_box); layout.addWidget(list_widget)
+        layout = QVBoxLayout(group_box)
+        layout.addWidget(list_widget)
         return group_box, list_widget
 
-    def on_language_changed(self, lang_code): self.current_lang = lang_code; self.update_ui_text()
-    
+    def on_language_changed(self, lang_code): 
+        self.current_lang = lang_code
+        self.update_ui_text()
+        self.update_all_views()
+
     def on_name_display_changed(self, index):
         key = self.name_display_combo.itemData(index)
         if key:
-            self.current_display_name_key = key; self.filter_card_list()
-            self.update_deck_list_widget(self.main_deck_list, self.main_deck)
-            self.update_deck_list_widget(self.extra_deck_list, self.extra_deck)
-            self.update_deck_list_widget(self.side_deck_list, self.side_deck)
+            self.current_display_name_key = key
+            self.filter_card_list()
+            self.update_all_views()
 
     def update_ui_text(self):
         lang = self.current_lang
@@ -194,11 +219,11 @@ class DeckBuilderWindow(QMainWindow):
         self.ja_action.setChecked(lang == "ja"); self.en_action.setChecked(lang == "en")
         self.browser_group.setTitle(self.translations["search_group"][lang]); self.search_input.setPlaceholderText(self.translations["search_placeholder"][lang])
         self.display_name_label.setText(self.translations["display_name_label"][lang]); self.details_group.setTitle(self.translations["details_group"][lang])
-        self.card_image_label.setText(self.translations["no_card_selected"][lang]); self.add_to_main_btn.setText(self.translations["add_to_main"][lang])
+        if not self.active_cid: self.card_image_label.setText(self.translations["no_card_selected"][lang])
+        self.add_to_main_btn.setText(self.translations["add_to_main"][lang])
         self.add_to_extra_btn.setText(self.translations["add_to_extra"][lang]); self.add_to_side_btn.setText(self.translations["add_to_side"][lang])
         self.stats_group.setTitle(self.translations["deck_info_group"][lang]); self.points_label_title.setText(f"<b>{self.translations['points'][lang]}:</b>")
-        self.cap_label_title.setText(f"<b>{self.translations['cap'][lang]}:</b>"); self.main_deck_group.setTitle(self.translations["main_deck_label"][lang])
-        self.extra_deck_group.setTitle(self.translations["extra_deck_label"][lang]); self.side_deck_group.setTitle(self.translations["side_deck_label"][lang])
+        self.cap_label_title.setText(f"<b>{self.translations['cap'][lang]}:</b>")
         self.name_display_combo.blockSignals(True); self.name_display_combo.clear()
         for key, names in self.name_options.items(): self.name_display_combo.addItem(names[lang], key)
         index = self.name_display_combo.findData(self.current_display_name_key)
@@ -206,8 +231,9 @@ class DeckBuilderWindow(QMainWindow):
         self.name_display_combo.blockSignals(False); self.update_stats_display()
 
     def get_card_display_name(self, card_data):
-        name = card_data.get(self.current_display_name_key) or card_data.get("cn_name")
-        return name if name else None
+        if not card_data: return "Unknown Card"
+        name = card_data.get(self.current_display_name_key) or card_data.get("cn_name") or "Unknown Card"
+        return name
 
     def filter_card_list(self):
         search_text = self.search_input.text().lower(); temp_card_list = []
@@ -215,7 +241,8 @@ class DeckBuilderWindow(QMainWindow):
             name = self.get_card_display_name(data)
             if name and (not search_text or search_text in name.lower()):
                 temp_card_list.append(cid)
-        self.card_list_cids = sorted(temp_card_list, key=lambda c: self.get_card_display_name(self.all_cards[c]))
+        temp_card_list.sort(key=lambda c: self.get_card_display_name(self.all_cards[c]))
+        self.card_list_cids = temp_card_list
         self.update_card_list_view()
 
     def update_card_list_view(self):
@@ -224,8 +251,7 @@ class DeckBuilderWindow(QMainWindow):
             card_data = self.all_cards.get(cid)
             if card_data:
                 display_name = self.get_card_display_name(card_data)
-                if display_name:
-                    item = QListWidgetItem(display_name); item.setData(Qt.UserRole, cid); self.card_list_view.addItem(item)
+                item = QListWidgetItem(display_name); item.setData(Qt.UserRole, cid); self.card_list_view.addItem(item)
     
     def display_card_by_cid(self, cid, source_list):
         self.active_cid = cid
@@ -235,7 +261,7 @@ class DeckBuilderWindow(QMainWindow):
         image_path = os.path.join("pics", f"{card_data.get('id')}.jpg"); pixmap = QPixmap(image_path)
         if pixmap.isNull(): self.card_image_label.setText(self.translations["image_not_found"][self.current_lang])
         else: self.card_image_label.setPixmap(pixmap)
-        point_cost = card_data.get("point", 0); display_name = self.get_card_display_name(card_data) or ""
+        point_cost = card_data.get("point", 0); display_name = self.get_card_display_name(card_data)
         info_text = (f"<b>{display_name}</b><br><i>{card_data.get('en_name', '')}</i><br><br>"
                      f"<b>{self.translations['points_cost'][self.current_lang]}: {point_cost}</b><hr>"
                      f"{card_data.get('text', {}).get('types', '').replace(chr(10), '<br>')}<hr>"
@@ -260,39 +286,100 @@ class DeckBuilderWindow(QMainWindow):
     
     def update_deck_list_widget(self, list_widget, deck_dict):
         list_widget.clear()
-        sorted_ids = sorted(deck_dict.keys(), key=lambda i: self.get_card_display_name(self.all_cards[self.id_to_cid[str(i)]]) or "")
+        sorted_ids = sorted(deck_dict.keys(), key=lambda i: self.get_card_display_name(self.all_cards.get(self.id_to_cid.get(str(i)))))
+        
         for card_id in sorted_ids:
-            count = deck_dict[card_id]; cid = self.id_to_cid.get(str(card_id))
-            if cid:
-                card_data = self.all_cards[cid]; display_name = self.get_card_display_name(card_data)
-                if display_name:
-                    point_cost = card_data.get("point", 0)
-                    display_text = f"[{count}x] {display_name}"
-                    if point_cost > 0: display_text += f"  ({point_cost} P)"
-                    item = QListWidgetItem(display_text); item.setData(Qt.UserRole, card_id); list_widget.addItem(item)
+            count = deck_dict[card_id]
+            cid = self.id_to_cid.get(str(card_id))
+            if not cid: continue
+            
+            card_data = self.all_cards.get(cid, {})
+            display_name = self.get_card_display_name(card_data)
+            point_cost = card_data.get("point", 0)
+            image_path = os.path.join("pics", f"{card_id}.jpg")
+
+            base_pixmap = QPixmap(image_path).scaled(self.icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            if base_pixmap.isNull() or base_pixmap.size() != self.icon_size:
+                base_pixmap = QPixmap(self.icon_size)
+                base_pixmap.fill(Qt.darkGray)
+
+            final_icon = QIcon()
+            if point_cost > 0:
+                overlay_pixmap = base_pixmap.copy()
+                painter = QPainter(overlay_pixmap)
+                font = QFont(); font.setBold(True); font.setPixelSize(16)
+                painter.setFont(font)
+                point_text = str(point_cost)
+                
+                # Draw black outline for better visibility
+                painter.setPen(QColor("black"))
+                painter.drawText(QRect(2, 2, self.icon_size.width(), self.icon_size.height()), Qt.AlignTop | Qt.AlignLeft, point_text)
+                painter.drawText(QRect(4, 2, self.icon_size.width(), self.icon_size.height()), Qt.AlignTop | Qt.AlignLeft, point_text)
+                painter.drawText(QRect(2, 4, self.icon_size.width(), self.icon_size.height()), Qt.AlignTop | Qt.AlignLeft, point_text)
+                painter.drawText(QRect(4, 4, self.icon_size.width(), self.icon_size.height()), Qt.AlignTop | Qt.AlignLeft, point_text)
+
+                # Draw main gold text
+                painter.setPen(QColor("#FFD700"))
+                painter.drawText(QRect(3, 3, self.icon_size.width(), self.icon_size.height()), Qt.AlignTop | Qt.AlignLeft, point_text)
+                painter.end()
+                final_icon = QIcon(overlay_pixmap)
+            else:
+                final_icon = QIcon(base_pixmap)
+
+            for _ in range(count):
+                item = QListWidgetItem()
+                item.setIcon(final_icon)
+                item.setText(display_name)
+                item.setData(Qt.UserRole, card_id)
+                item.setToolTip(f"{display_name}\nPoint: {point_cost}")
+                list_widget.addItem(item)
     
     def update_all_views(self):
+        lang = self.current_lang
+        main_total = sum(self.main_deck.values())
+        m, s, t = 0, 0, 0
+        for card_id, count in self.main_deck.items():
+            cid = self.id_to_cid.get(str(card_id), ''); card_data = self.all_cards.get(cid, {})
+            types = card_data.get("text", {}).get("types", "")
+            if "怪兽" in types: m += count
+            elif "魔法" in types: s += count
+            elif "陷阱" in types: t += count
+        main_title_base = self.translations["main_deck_label"][lang]
+        self.main_deck_group.setTitle(f"{main_title_base} | {main_total} ({self.translations['monster_short'][lang]}:{m} {self.translations['spell_short'][lang]}:{s} {self.translations['trap_short'][lang]}:{t})")
+        
+        extra_total = sum(self.extra_deck.values())
+        f, s_ex, x = 0, 0, 0
+        for card_id, count in self.extra_deck.items():
+            cid = self.id_to_cid.get(str(card_id), ''); card_data = self.all_cards.get(cid, {})
+            types = card_data.get("text", {}).get("types", "")
+            if "融合" in types: f += count
+            elif "同调" in types: s_ex += count
+            elif "超量" in types: x += count
+        extra_title_base = self.translations["extra_deck_label"][lang]
+        self.extra_deck_group.setTitle(f"{extra_title_base} | {extra_total} ({self.translations['fusion_short'][lang]}:{f} {self.translations['synchro_short'][lang]}:{s_ex} {self.translations['xyz_short'][lang]}:{x})")
+
+        side_total = sum(self.side_deck.values())
+        side_title_base = self.translations["side_deck_label"][lang]
+        self.side_deck_group.setTitle(f"{side_title_base} | {side_total}")
+
         self.update_deck_list_widget(self.main_deck_list, self.main_deck)
         self.update_deck_list_widget(self.extra_deck_list, self.extra_deck)
         self.update_deck_list_widget(self.side_deck_list, self.side_deck)
+        
         self.update_stats_display(); self.update_points_display()
 
     def restore_selection(self):
         if not self.active_cid or not self.active_card_source_list: return
-        
         target_list = self.active_card_source_list
         target_list.blockSignals(True)
-        
         data_to_find = self.active_cid
         if target_list is not self.card_list_view:
             card_id = self.all_cards[self.active_cid].get("id")
             data_to_find = card_id
-
         for i in range(target_list.count()):
             item = target_list.item(i)
             if item.data(Qt.UserRole) == data_to_find:
-                item.setSelected(True)
-                target_list.scrollToItem(item)
+                item.setSelected(True); target_list.scrollToItem(item)
                 break
         target_list.blockSignals(False)
 
@@ -325,7 +412,13 @@ class DeckBuilderWindow(QMainWindow):
     def add_card(self, deck_name, card_id):
         cid = self.id_to_cid.get(str(card_id))
         if not cid: return
-        card_data = self.all_cards[cid]; card_type_text = card_data.get("text", {}).get("types", "")
+        card_data = self.all_cards[cid]
+        card_type_text = card_data.get("text", {}).get("types", "")
+        
+        if "灵摆" in card_type_text or "链接" in card_type_text:
+            QMessageBox.warning(self, self.translations["pend_link_forbidden_title"][self.current_lang], self.translations["pend_link_forbidden_msg"][self.current_lang])
+            return
+
         is_extra_deck_monster = any(t in card_type_text for t in ["融合", "同调", "超量"])
         if deck_name == "Main Deck" and is_extra_deck_monster:
             QMessageBox.warning(self, self.translations["legality_error_title"][self.current_lang], self.translations["extra_in_main_error_msg"][self.current_lang]); return
@@ -351,7 +444,10 @@ class DeckBuilderWindow(QMainWindow):
     def new_deck(self):
         self.active_cid = None; self.active_card_source_list = None
         self.main_deck.clear(); self.extra_deck.clear(); self.side_deck.clear()
-        self.current_file_path = None; self.update_all_views()
+        self.current_file_path = None
+        self.card_info_label.clear()
+        self.card_image_label.setText(self.translations["no_card_selected"][self.current_lang])
+        self.update_all_views()
         self.setWindowTitle(f"{self.translations['window_title'][self.current_lang]} - {self.translations['new_deck'][self.current_lang]}")
 
     def open_deck(self):
